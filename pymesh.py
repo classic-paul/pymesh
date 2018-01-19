@@ -65,7 +65,7 @@ class NetworkBrowser(threading.Thread):
 
 class NetworkAdvertiser(threading.Thread):
     ''' Advertises the node to the mesh '''
-    def __init__(self, node_name, port, lock):
+    def __init__(self, node_name, port, lock, node):
         super(NetworkAdvertiser, self).__init__()
         self.node_name = node_name
         self.ip_address = self.get_my_ip()
@@ -73,17 +73,21 @@ class NetworkAdvertiser(threading.Thread):
         self.port = port
         self.info = None
         self.lock = lock
+        self.node = node
     def get_my_ip(self):
         ''' returns the ip address of the interface connected to the local subnet '''
-        my_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            my_socket.connect(('10.255.255.255', 1))
-            my_ip = my_socket.getsockname()[0]
-        except:
-            my_ip = '127.0.0.1'
-        finally:
-            my_socket.close()
-        return my_ip
+        if self.node.ip is not None:
+            return self.node.ip
+        else:
+            my_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                my_socket.connect(('10.255.255.255', 1))
+                my_ip = my_socket.getsockname()[0]
+            except:
+                my_ip = '127.0.0.1'
+            finally:
+                my_socket.close()
+            return my_ip
     def run(self):
         desc = {'type': 'pymesh'}
         info = ServiceInfo("_pymesh._tcp.local.", "{name}._pymesh._tcp.local.".format(
@@ -148,9 +152,10 @@ class Node(object):
     Handles connecting, disconnecting,
     and message passing for a node in a mesh network
     '''
-    def __init__(self, node_name, port, log_level, topics):
+    def __init__(self, node_name, port, log_level, topics, ip):
         self.name = node_name
         self.port = port
+        self.ip = ip
         self.topics = topics # topics to subscribe to
         self.log_level = log_level
         self.__initialise_logger__()
@@ -218,7 +223,7 @@ class Node(object):
         self.network_browser.start()
     def start_advertiser(self):
         if self.network_advertiser is None:
-            self.network_advertiser = NetworkAdvertiser(self.name, self.port, self.advertiser_lock)
+            self.network_advertiser = NetworkAdvertiser(self.name, self.port, self.advertiser_lock, self)
         self.network_advertiser.start()
     def start_publisher(self):
         if self.publisher is None:
@@ -246,11 +251,12 @@ def main(args):
     parser.add_argument('--port', "-p", action='store', dest='port', type=int, help='Port the node will publish on')
     parser.add_argument('--log-level', "-l", action='store', dest='log_level', help='logging level ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")', default='WARNING')
     parser.add_argument('--topics', "-t", nargs='+', action='store', dest='topics', help='topics to subscribe to (name will be subscribed to automatically)')
+    parser.add_argument('--ip', "-i", action='store', dest='ip', help='manually override ip discovery', default=None)
     
     a = parser.parse_args(args)
     a.topics.append(a.name)
     
-    mesh_node = Node(a.name, a.port, a.log_level, a.topics)
+    mesh_node = Node(a.name, a.port, a.log_level, a.topics, a.ip)
     mesh_node.mesh_discovery_start()
     try:
         while True:
