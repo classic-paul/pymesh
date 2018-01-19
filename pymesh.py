@@ -68,12 +68,12 @@ class NetworkAdvertiser(threading.Thread):
     def __init__(self, node_name, port, lock, node):
         super(NetworkAdvertiser, self).__init__()
         self.node_name = node_name
+        self.node = node
         self.ip_address = self.get_my_ip()
         self.desc = {'name': 'pymesh'}
         self.port = port
         self.info = None
         self.lock = lock
-        self.node = node
     def get_my_ip(self):
         ''' returns the ip address of the interface connected to the local subnet '''
         if self.node.ip is not None:
