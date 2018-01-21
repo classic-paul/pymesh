@@ -32,7 +32,11 @@ class MessageHandlerSimple(object):
     ''' Stub message handler '''
     def process_message(self, msg):
         ''' Send the message to stdout '''
-        self.logger.debug("caught msg: " + msg.decode("utf-8"))
+        self.logger.debug("Message handler handled: " + msg.decode('utf-8'))
+        msg_obj = json.loads(msg.decode('utf-8'))
+        for key in msg_obj:
+            print("key: " + key)
+            print("value: " + str(msg_obj[key]))
 
 #--------------------------------------------------------
 # On run() a forked process polls the network for
@@ -52,12 +56,12 @@ class Subscriber(threading.Thread):
         logger = logging.getLogger("pymesh")
         while self.run_loop:
             msg = self.queue.get()
-            logger.debug("Got msg: " + msg.decode("utf-8"))
+            logger.debug("Subscriber caught msg: " + msg.decode('utf-8'))
             if not msg == b'$$DIE':
                 self.node.message_handler.process_message(msg)
             logger.debug("Handled msg")
             self.queue.task_done()
-        self.queue.join()
+        self.queue = None
 
 #--------------------------------------------------------
 # On run() Publisher waits for a message to be placed on
@@ -79,7 +83,7 @@ class Publisher(threading.Thread):
             if not msg == b'$$DIE':
                 self.mesh_pipe.send(msg.encode('utf_8'))
             self.queue.task_done()
-        self.queue.join()
+        self.queue = None
 
 #--------------------------------------------------------
 class Node(object):
@@ -128,7 +132,7 @@ class Node(object):
 
     def mesh_task(self, ctx, pipe):
         n = Pyre("MESH")
-        n.set_header("MESH", "c_n_c")
+        n.set_header("MESH", "subnet c and c")
         n.join("MESH")
         n.start()
 
@@ -145,25 +149,41 @@ class Node(object):
                 # message to quit
                 if message.decode('utf-8') == "$$STOP":
                     break
-                self.logger.debug("MESH_TASK: {msg}".format(msg=message))
+                self.subscriber.queue.put(
+                    json.dumps(
+                        {"msg":message.decode('utf-8')}
+                    ).encode('utf-8')
+                )
                 n.shouts("MESH", message.decode('utf-8'))
             else:
             #if n.socket() in items and items[n.socket()] == zmq.POLLIN:
                 cmds = n.recv()
                 msg_type = cmds.pop(0)
-                self.logger.debug("NODE_MSG TYPE: %s" % msg_type)
-                self.logger.debug("NODE_MSG PEER: %s" % uuid.UUID(bytes=cmds.pop(0)))
-                self.logger.debug("NODE_MSG NAME: %s" % cmds.pop(0))
+                msg_uuid = uuid.UUID(bytes=cmds.pop(0))
+                msg_name = cmds.pop(0)
+                msg_group = b''
+                msg_headers = ''
                 if msg_type.decode('utf-8') == "SHOUT":
-                    self.logger.debug("NODE_MSG GROUP: %s" % cmds.pop(0))
+                    msg_group = cmds.pop(0).decode('utf-8')
                 elif msg_type.decode('utf-8') == "ENTER":
-                    headers = json.loads(cmds.pop(0).decode('utf-8'))
-                    self.logger.debug("NODE_MSG HEADERS: %s" % headers)
-                    for key in headers:
-                        self.logger.debug("key = {0}, value = {1}".format(key, headers[key]))
-                self.logger.debug("NODE_MSG CONT: %s" % cmds)
+                    msg_headers = json.loads(cmds.pop(0).decode('utf-8'))
+
+                msg_cont = []
+                for i in cmds:
+                    msg_cont.append(i.decode('utf-8'))
                 try:
-                    self.subscriber.queue.put(cmds[0])
+                    msg_json = json.dumps(
+                        {
+                            'msg_cont':msg_cont,
+                            'msg_type':msg_type.decode('utf-8'),
+                            'msg_uuid':str(msg_uuid),
+                            'msg_name':msg_name.decode('utf-8'),
+                            'msg_group':msg_group.decode('utf-8'),
+                            'msg_headers':msg_headers
+                        }
+                    )
+                    self.logger.debug(msg_json)
+                    self.subscriber.queue.put(msg_json.encode('utf-8'))
                 except Exception as e:
                     self.logger.debug(e)
         n.stop()
@@ -174,14 +194,15 @@ class Node(object):
 def main(args):
     parser = argparse.ArgumentParser()
     parser.add_argument('--test', action='store', dest='test', type=bool, help='Run a test')
-    
+
     a = parser.parse_args(args)
     if a.test:
         node_a = Node(MessageHandlerSimple(), logging.DEBUG)
         node_a.connect()
-        for i in range(6):
+        sleep(5)
+        for i in range(10):
             node_a.send_message("Hello, World! {num}".format(num=str(i)))
-            sleep(2)
+            sleep(1)
         node_a.disconnect()
 
 #------------------------------------------------------------------------------
