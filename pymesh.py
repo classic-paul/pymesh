@@ -23,8 +23,7 @@ import zmq
 # Simple message handler processes messages by only
 # logging messages. This is a class becase a concrete,
 # useful handler would incorporate a range of functions
-# for manipulating messages - for example by sending
-# commands and data encoded as json.
+# for manipulating messages, depending on mesage/data.
 #--------------------------------------------------------
 class MessageHandlerSimple(object):
     def __init__(self):
