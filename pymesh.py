@@ -7,17 +7,34 @@ except Exception as e:
 # standard imports
 import argparse
 import json
-import logging
+import coloredlogs, logging
+import verboselogs
 import sys
 import threading
 from time import sleep
 import uuid
-
-# non-standard imports
 from pyre import zhelper
 from logformats import CustomJsonFormatter
 from queue import Queue
 import zmq
+
+LOG_LEVEL = logging.WARNING
+
+class HasLogger(object):
+    def __init__(self, name):
+        self.logger = verboselogs.VerboseLogger(name)
+        self.logger.propagate = False
+        if not self.logger.handlers: 
+            f_handler = logging.FileHandler('./pymesh.log')
+            f_formatter = CustomJsonFormatter('(timestamp) (level) (name) (message)')
+            f_handler.setFormatter(f_formatter)
+            c_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            ch = logging.StreamHandler()
+            ch.setFormatter(c_formatter)
+            self.logger.addHandler(ch)
+            self.logger.addHandler(f_handler)
+            coloredlogs.install(LOG_LEVEL, logger=self.logger)
+        self.logger.spam('.__init__()')
 
 #--------------------------------------------------------
 # Simple message handler processes messages by only
@@ -25,17 +42,19 @@ import zmq
 # useful handler would incorporate a range of functions
 # for manipulating messages, depending on mesage/data.
 #--------------------------------------------------------
-class MessageHandlerSimple(object):
+class MessageHandlerSimple(HasLogger):
     def __init__(self):
-        self.logger = logging.getLogger("pymesh")
+        super(MessageHandlerSimple, self).__init__("MessageHandlerSimple")
     ''' Stub message handler '''
     def process_message(self, msg):
-        ''' Send the message to stdout '''
-        self.logger.debug("Message handler handled: " + msg.decode('utf-8'))
-        msg_obj = json.loads(msg.decode('utf-8'))
-        for key in msg_obj:
-            print("key: " + key)
-            print("value: " + str(msg_obj[key]))
+        ''' Send the message to logger '''
+        try:
+            msg_obj = json.loads(msg.decode('utf-8'))
+            for key in msg_obj:
+                self.logger.success(".process_message() handled {key}, {value}".format(key=key, value=str(msg_obj[key])))
+        except Exception as e:
+            self.logger.warning(".process_message() failed {key}, {value} with {xcptn}".format(key=key, value=str(msg_obj[key]), xcptn=e))
+
 
 #--------------------------------------------------------
 # On run() a forked process polls the network for
@@ -48,18 +67,23 @@ class Subscriber(threading.Thread):
     ''' Receives messages from mesh '''
     def __init__(self, node):
         super(Subscriber, self).__init__()
+        self.hl = HasLogger("Subscriber")
+        self.logger = self.hl.logger
         self.queue = Queue()
         self.node = node
         self.run_loop = False
     def run(self):
-        logger = logging.getLogger("pymesh")
         while self.run_loop:
             msg = self.queue.get()
-            logger.debug("Subscriber caught msg: " + msg.decode('utf-8'))
+            self.logger.debug("Subscriber thread got message: " + msg.decode('utf-8'))
             if not msg == b'$$DIE':
+                self.logger.spam("Subscriber message not $$DIE")
                 self.node.message_handler.process_message(msg)
-            logger.debug("Handled msg")
-            self.queue.task_done()
+            try:
+                self.queue.task_done()
+                self.logger.success("Task done")
+            except Exception as e:
+                self.logger.warning("Subscriber dequeue failed {xcptn}".format(xcptn=e))
         self.queue = None
 
 #--------------------------------------------------------
@@ -71,9 +95,10 @@ class Publisher(threading.Thread):
     ''' Sends messages to mesh '''
     def __init__(self, mesh_pipe):
         super(Publisher, self).__init__()
+        self.hl = HasLogger("Publisher")
+        self.logger = self.hl.logger
         self.queue = None
         self.mesh_pipe = mesh_pipe
-        self.logger = logging.getLogger("pymesh")
         self.run_loop = False
     def run(self):
         self.queue = Queue()
@@ -85,21 +110,15 @@ class Publisher(threading.Thread):
         self.queue = None
 
 #--------------------------------------------------------
-class Node(object):
+class Node(HasLogger):
     ''' Handles message passing for a node in a mesh network '''
-    def __init__(self, message_handler, log_level):
+    def __init__(self, message_handler):
+        super(Node, self).__init__("Node")
         self.message_handler = message_handler
         self.publisher = None
         self.subscriber = None
         self.ctx = None
         self.mesh_pipe = None
-        self.logger = logging.getLogger("pymesh")
-        self.logger.setLevel(log_level)
-        f_handler = logging.FileHandler('./pymesh.log')
-        f_formatter = CustomJsonFormatter('(timestamp) (level) (name) (message)')
-        f_handler.setFormatter(f_formatter)
-        self.logger.addHandler(f_handler)
-        self.logger.propagate = False
 
     def connect(self):
         ''' Connect to the mesh network '''
@@ -119,8 +138,10 @@ class Node(object):
         self.mesh_pipe.send("$$STOP".encode('utf-8'))
         self.publisher.run_loop = False
         self.subscriber.run_loop = False
+        # send poison pill to queues
         self.publisher.queue.put("$$DIE".encode('UTF-8'))
         self.subscriber.queue.put("$$DIE".encode('UTF-8'))
+        # clear up
         self.publisher.join()
         self.subscriber.join()
         self.ctx = None
@@ -130,9 +151,10 @@ class Node(object):
         self.publisher.queue.put(msg)
 
     def mesh_task(self, ctx, pipe):
-        n = Pyre("MESH")
-        n.set_header("MESH", "subnet c and c")
+        n = Pyre("BILL")
         n.join("MESH")
+
+        n.set_header("MESH", "subnet c and c")
         n.start()
 
         poller = zmq.Poller()
@@ -142,7 +164,6 @@ class Node(object):
         self.logger.debug(n.socket())
         while True:
             items = dict(poller.poll())
-            self.logger.debug(n.socket(), items)
             if pipe in items and items[pipe] == zmq.POLLIN:
                 message = pipe.recv()
                 # message to quit
@@ -160,7 +181,7 @@ class Node(object):
                 msg_type = cmds.pop(0)
                 msg_uuid = uuid.UUID(bytes=cmds.pop(0))
                 msg_name = cmds.pop(0)
-                msg_group = b''
+                msg_group = ''
                 msg_headers = ''
                 if msg_type.decode('utf-8') == "SHOUT":
                     msg_group = cmds.pop(0).decode('utf-8')
@@ -177,14 +198,13 @@ class Node(object):
                             'msg_type':msg_type.decode('utf-8'),
                             'msg_uuid':str(msg_uuid),
                             'msg_name':msg_name.decode('utf-8'),
-                            'msg_group':msg_group.decode('utf-8'),
+                            'msg_group':msg_group,
                             'msg_headers':msg_headers
                         }
                     )
-                    self.logger.debug(msg_json)
                     self.subscriber.queue.put(msg_json.encode('utf-8'))
                 except Exception as e:
-                    self.logger.debug(e)
+                    self.logger.warning("json dumps error in mesh_task" % e)
         n.stop()
 
 #--------------------------------------------------------
@@ -196,7 +216,7 @@ def main(args):
 
     a = parser.parse_args(args)
     if a.test:
-        node_a = Node(MessageHandlerSimple(), logging.DEBUG)
+        node_a = Node(MessageHandlerSimple())
         node_a.connect()
         sleep(5)
         for i in range(10):
