@@ -18,10 +18,8 @@ from logformats import CustomJsonFormatter
 from queue import Queue
 import zmq
 
-LOG_LEVEL = logging.WARNING
-
-class HasLogger(object):
-    def __init__(self, name):
+class LogBuilder(object):
+    def __init__(self, name, log_level):
         self.logger = verboselogs.VerboseLogger(name)
         self.logger.propagate = False
         if not self.logger.handlers: 
@@ -33,7 +31,7 @@ class HasLogger(object):
             ch.setFormatter(c_formatter)
             self.logger.addHandler(ch)
             self.logger.addHandler(f_handler)
-            coloredlogs.install(LOG_LEVEL, logger=self.logger)
+            coloredlogs.install(log_level, logger=self.logger)
         self.logger.spam('.__init__()')
 
 #--------------------------------------------------------
@@ -42,18 +40,31 @@ class HasLogger(object):
 # useful handler would incorporate a range of functions
 # for manipulating messages, depending on mesage/data.
 #--------------------------------------------------------
-class MessageHandlerSimple(HasLogger):
-    def __init__(self):
-        super(MessageHandlerSimple, self).__init__("MessageHandlerSimple")
+class MessageHandlerSimple(LogBuilder):
     ''' Stub message handler '''
-    def process_message(self, msg):
+    def __init__(self, log_level):
+        super(MessageHandlerSimple, self).__init__("MessageHandlerSimple", log_level)
+    def process_incoming(self, msg):
         ''' Send the message to logger '''
         try:
             msg_obj = json.loads(msg.decode('utf-8'))
             for key in msg_obj:
-                self.logger.success(".process_message() handled {key}, {value}".format(key=key, value=str(msg_obj[key])))
+                if key == "msg":
+                    self.logger.success(
+                        ".process_incoming() handled {key}, {value}".format(
+                            key=key, value=str(msg_obj[key])
+                        )
+                    )
         except Exception as e:
-            self.logger.warning(".process_message() failed {key}, {value} with {xcptn}".format(key=key, value=str(msg_obj[key]), xcptn=e))
+            log_msg = (
+                ".process_incoming() failed {key}, {value} with {xcptn}".format(
+                    key=key, value=str(msg_obj[key]), xcptn=e
+                )
+            )
+            self.logger.warning(log_msg)
+    def process_outgoing(self, msg):
+        return msg.encode('utf_8')
+
 
 
 #--------------------------------------------------------
@@ -65,9 +76,9 @@ class MessageHandlerSimple(HasLogger):
 #--------------------------------------------------------
 class Subscriber(threading.Thread):
     ''' Receives messages from mesh '''
-    def __init__(self, node):
+    def __init__(self, node, log_level):
         super(Subscriber, self).__init__()
-        self.hl = HasLogger("Subscriber")
+        self.hl = LogBuilder("Subscriber", log_level)
         self.logger = self.hl.logger
         self.queue = Queue()
         self.node = node
@@ -75,16 +86,17 @@ class Subscriber(threading.Thread):
     def run(self):
         while self.run_loop:
             msg = self.queue.get()
-            self.logger.debug("Subscriber thread got message: " + msg.decode('utf-8'))
-            if not msg == b'$$DIE':
-                self.logger.spam("Subscriber message not $$DIE")
-                self.node.message_handler.process_message(msg)
-            try:
-                self.queue.task_done()
-                self.logger.success("Task done")
-            except Exception as e:
-                self.logger.warning("Subscriber dequeue failed {xcptn}".format(xcptn=e))
-        self.queue = None
+            if msg == b'$$DIE':
+                self.queue = None
+                self.run_loop = False
+            else:
+                self.logger.debug("Subscriber thread got message: " + msg.decode('utf-8'))
+                self.node.message_handler.process_incoming(msg)
+                try:
+                    self.queue.task_done()
+                    self.logger.debug("Task done")
+                except Exception as e:
+                    self.logger.warning("Subscriber dequeue failed {xcptn}".format(xcptn=e))
 
 #--------------------------------------------------------
 # On run() Publisher waits for a message to be placed on
@@ -93,41 +105,46 @@ class Subscriber(threading.Thread):
 #--------------------------------------------------------
 class Publisher(threading.Thread):
     ''' Sends messages to mesh '''
-    def __init__(self, mesh_pipe):
+    def __init__(self, mesh_pipe, message_handler, log_level):
         super(Publisher, self).__init__()
-        self.hl = HasLogger("Publisher")
+        self.hl = LogBuilder("Publisher", log_level)
         self.logger = self.hl.logger
         self.queue = None
         self.mesh_pipe = mesh_pipe
         self.run_loop = False
+        self.message_handler = message_handler
     def run(self):
         self.queue = Queue()
         while self.run_loop:
             msg = self.queue.get()
-            if not msg == b'$$DIE':
-                self.mesh_pipe.send(msg.encode('utf_8'))
-            self.queue.task_done()
-        self.queue = None
+            if msg == b'$$DIE':
+                self.run_loop = False
+                self.queue = None
+            else:
+                self.mesh_pipe.send(self.message_handler.process_outgoing(msg))
+                self.queue.task_done()
 
 #--------------------------------------------------------
-class Node(HasLogger):
+class Node(LogBuilder):
     ''' Handles message passing for a node in a mesh network '''
-    def __init__(self, message_handler):
-        super(Node, self).__init__("Node")
+    def __init__(self, message_handler, name, log_level):
+        super(Node, self).__init__(name, log_level)
+        self.name = name
         self.message_handler = message_handler
         self.publisher = None
         self.subscriber = None
         self.ctx = None
         self.mesh_pipe = None
+        self.log_level = log_level
 
     def connect(self):
         ''' Connect to the mesh network '''
         self.ctx = zmq.Context()
         self.mesh_pipe = zhelper.zthread_fork(self.ctx, self.mesh_task)
         if self.publisher is None:
-            self.publisher = Publisher(self.mesh_pipe)
+            self.publisher = Publisher(self.mesh_pipe, self.message_handler, self.log_level)
         if self.subscriber is None:
-            self.subscriber = Subscriber(self)
+            self.subscriber = Subscriber(self, self.log_level)
         self.publisher.run_loop = True
         self.publisher.start()
         self.subscriber.run_loop = True
@@ -136,8 +153,6 @@ class Node(HasLogger):
     def disconnect(self):
         ''' Disconnect from mesh netwok '''
         self.mesh_pipe.send("$$STOP".encode('utf-8'))
-        self.publisher.run_loop = False
-        self.subscriber.run_loop = False
         # send poison pill to queues
         self.publisher.queue.put("$$DIE".encode('UTF-8'))
         self.subscriber.queue.put("$$DIE".encode('UTF-8'))
@@ -151,7 +166,7 @@ class Node(HasLogger):
         self.publisher.queue.put(msg)
 
     def mesh_task(self, ctx, pipe):
-        n = Pyre("BILL")
+        n = Pyre(self.name)
         n.join("MESH")
 
         n.set_header("MESH", "subnet c and c")
@@ -213,10 +228,15 @@ class Node(HasLogger):
 def main(args):
     parser = argparse.ArgumentParser()
     parser.add_argument('--test', action='store', dest='test', type=bool, help='Run a test')
-
+    parser.add_argument('--name', '-n', action='store', dest='name', type=str, help='The name of this node, used in logging')
+    parser.add_argument('--log-level', '-v', action='store', dest='verbosity', type=int, help='Logging level: 5 (spam), 10, 15, 20, 25, 30, 35, 40, 50 (critical)')
     a = parser.parse_args(args)
+
+
+
     if a.test:
-        node_a = Node(MessageHandlerSimple())
+        msg_handler = MessageHandlerSimple(15)
+        node_a = Node(msg_handler, 'Test node', 15)
         node_a.connect()
         sleep(5)
         for i in range(10):
