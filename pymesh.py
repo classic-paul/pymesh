@@ -50,7 +50,7 @@ class MessageHandlerSimple(LogBuilder):
             msg_obj = json.loads(msg.decode('utf-8'))
             for key in msg_obj:
                 # only logging incoming messages
-                if key == "msg_cont"
+                if key == "msg_cont":
                     self.logger.success(
                         ".process_incoming() {key}, {value}".format(
                             key=key, value=str(msg_obj[key])
