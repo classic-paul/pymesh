@@ -1,0 +1,4 @@
+https://github.com/sphaero/pyre/archive/master.zip
+coloredlogs
+verboselogs
+python-json-logger

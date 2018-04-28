@@ -1,4 +1,7 @@
-''' Command-and-control using a mesh network '''
+"""
+Command-and-control using a mesh network
+"""
+
 try:
     from zyre_pyzmq import Zyre as Pyre
 except Exception as e:
@@ -18,6 +21,7 @@ from logformats import CustomJsonFormatter
 from queue import Queue
 import zmq
 
+
 class LogBuilder(object):
     def __init__(self, name, log_level):
         self.logger = verboselogs.VerboseLogger(name)
@@ -34,18 +38,24 @@ class LogBuilder(object):
             coloredlogs.install(log_level, logger=self.logger)
         self.logger.spam('.__init__()')
 
-#--------------------------------------------------------
+
+# --------------------------------------------------------
 # Simple message handler processes messages by only
-# logging messages. This is a class becase a concrete,
+# logging messages. This is a class because a concrete,
 # useful handler would incorporate a range of functions
-# for manipulating messages, depending on mesage/data.
-#--------------------------------------------------------
+# for manipulating messages, depending on message/data.
+# --------------------------------------------------------
 class MessageHandlerSimple(LogBuilder):
-    ''' Stub message handler '''
+    """
+    Stub message handler
+    """
     def __init__(self, log_level):
         super(MessageHandlerSimple, self).__init__("MessageHandlerSimple", log_level)
+
     def process_incoming(self, msg):
-        ''' Send the message to logger '''
+        """
+        Send the message to logger
+        """
         try:
             msg_obj = json.loads(msg.decode('utf-8'))
             for key in msg_obj:
@@ -63,20 +73,23 @@ class MessageHandlerSimple(LogBuilder):
                 )
             )
             self.logger.warning(log_msg)
+
     def process_outgoing(self, msg):
         return msg.encode('utf_8')
 
 
-
-#--------------------------------------------------------
+# --------------------------------------------------------
 # On run() a forked process polls the network for
 # messages, Subscriber is blocked waiting on its queue
 # for a message to appear. As soon as a message is placed
 # on the queue Subscriber is unblocked and calls the
 # handler to process the message
-#--------------------------------------------------------
+# --------------------------------------------------------
 class Subscriber(threading.Thread):
-    ''' Receives messages from mesh '''
+    """
+    Receives messages from mesh
+    """
+
     def __init__(self, node, log_level):
         super(Subscriber, self).__init__()
         self.hl = LogBuilder("Subscriber", log_level)
@@ -84,6 +97,7 @@ class Subscriber(threading.Thread):
         self.queue = Queue()
         self.node = node
         self.run_loop = False
+
     def run(self):
         while self.run_loop:
             msg = self.queue.get()
@@ -99,13 +113,16 @@ class Subscriber(threading.Thread):
                 except Exception as e:
                     self.logger.warning("Subscriber dequeue failed {xcptn}".format(xcptn=e))
 
-#--------------------------------------------------------
+
+# --------------------------------------------------------
 # On run() Publisher waits for a message to be placed on
 # its queue. As soon as a message is queued, Publisher
 # becomes unblocked ad posts the message to the network
-#--------------------------------------------------------
+# --------------------------------------------------------
 class Publisher(threading.Thread):
-    ''' Sends messages to mesh '''
+    """
+    Sends messages to mesh
+    """
     def __init__(self, mesh_pipe, message_handler, log_level):
         super(Publisher, self).__init__()
         self.hl = LogBuilder("Publisher", log_level)
@@ -114,6 +131,7 @@ class Publisher(threading.Thread):
         self.mesh_pipe = mesh_pipe
         self.run_loop = False
         self.message_handler = message_handler
+
     def run(self):
         self.queue = Queue()
         while self.run_loop:
@@ -125,9 +143,12 @@ class Publisher(threading.Thread):
                 self.mesh_pipe.send(self.message_handler.process_outgoing(msg))
                 self.queue.task_done()
 
-#--------------------------------------------------------
+
+# --------------------------------------------------------
 class Node(LogBuilder):
-    ''' Handles message passing for a node in a mesh network '''
+    """
+    Handles message passing for a node in a mesh network
+    """
     def __init__(self, message_handler, name, log_level):
         super(Node, self).__init__(name, log_level)
         self.name = name
@@ -139,7 +160,9 @@ class Node(LogBuilder):
         self.log_level = log_level
 
     def connect(self):
-        ''' Connect to the mesh network '''
+        """
+        Connect to the mesh network
+        """
         self.ctx = zmq.Context()
         self.mesh_pipe = zhelper.zthread_fork(self.ctx, self.mesh_task)
         if self.publisher is None:
@@ -152,7 +175,9 @@ class Node(LogBuilder):
         self.subscriber.start()
 
     def disconnect(self):
-        ''' Disconnect from mesh netwok '''
+        """
+        Disconnect from mesh network
+        """
         self.mesh_pipe.send("$$STOP".encode('utf-8'))
         # send poison pill to queues
         self.publisher.queue.put("$$DIE".encode('UTF-8'))
@@ -210,12 +235,12 @@ class Node(LogBuilder):
                 try:
                     msg_json = json.dumps(
                         {
-                            'msg_cont':msg_cont,
-                            'msg_type':msg_type.decode('utf-8'),
-                            'msg_uuid':str(msg_uuid),
-                            'msg_name':msg_name.decode('utf-8'),
-                            'msg_group':msg_group,
-                            'msg_headers':msg_headers
+                            'msg_cont': msg_cont,
+                            'msg_type': msg_type.decode('utf-8'),
+                            'msg_uuid': str(msg_uuid),
+                            'msg_name': msg_name.decode('utf-8'),
+                            'msg_group': msg_group,
+                            'msg_headers': msg_headers
                         }
                     )
                     self.subscriber.queue.put(msg_json.encode('utf-8'))
@@ -223,21 +248,33 @@ class Node(LogBuilder):
                     self.logger.warning("json dumps error in mesh_task" % e)
         n.stop()
 
-#--------------------------------------------------------
+
+# --------------------------------------------------------
 # Run from command line
-#--------------------------------------------------------
+# --------------------------------------------------------
 def main(args):
     parser = argparse.ArgumentParser()
     parser.add_argument('--test', action='store', dest='test', type=bool, help='Run a test')
-    parser.add_argument('--name', '-n', action='store', dest='name', type=str, help='The name of this node, used in logging')
-    parser.add_argument('--log-level', '-v', action='store', dest='verbosity', type=int, help='Logging level: 5 (spam), 10, 15, 20, 25, 30, 35, 40, 50 (critical)')
+    parser.add_argument(
+        '--name',
+        '-n',
+        action='store',
+        dest='name',
+        type=str,
+        help='The name of this node, used in logging'
+    )
+    parser.add_argument(
+        '--log-level',
+        '-v',
+        action='store',
+        dest='verbosity',
+        type=int,
+        help='Logging level: 5 (spam), 10, 15, 20, 25, 30, 35, 40, 50 (critical)')
     a = parser.parse_args(args)
 
-
-
     if a.test:
-        msg_handler = MessageHandlerSimple(15)
-        node_a = Node(msg_handler, 'Test node', 15)
+        msg_handler = MessageHandlerSimple(a.verbosity)
+        node_a = Node(msg_handler, a.name, a.verbosity)
         node_a.connect()
         sleep(5)
         for i in range(10):
@@ -245,7 +282,8 @@ def main(args):
             sleep(1)
         node_a.disconnect()
 
-#------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
